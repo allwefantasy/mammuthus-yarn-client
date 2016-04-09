@@ -1,5 +1,4 @@
 # mammuthus-yarn-client
-a project most codes  extracting from spark-yarn module make build yarn program more easy
 
 mammuthus-yarn-client 后续为了方便，我们就缩写为MYC。 
 
@@ -9,9 +8,19 @@ MYC 主要源码来自于 Spark的yarn模块。通过对其进行改造，使得
 目前MYC还比较简单，但不影响你基于它非常快的构建出一个基于Yarn的分布式应用。
 
 
-## 基于MYC 开发
+## 基于MYC 开发基本原理
 
-基于Yarn开发的应用大体是一个典型Master-Slaves结构。
+基于Yarn开发的应用大体是一个典型Master-Slaves结构。其中Master 在Yarn中称为 ApplicationMaster. ApplicationMaster代表应用和
+ResourceManager进行交互。在MYC中提供了一个公用的ApplicationMaster实现，用户的Master则在在AM中的一个单独线程中被启动，启动完成后
+AM会获取到Master的地址和端口，然后将这些信息传递给应用对象的Slave，Slave从而根据这些信息和Master获取联系。
+
+通常Slave 和 Master的通讯方式有两种：
+
+1. 通过一个中间组件进行通讯，比如通过zookeeper来完成。
+2. Slave 主动向Master发送心跳，Master维持关系
+
+
+前面我们提到，Master被AM启动后，AM会获取到Master的地址和端口，这就需要一种途径传递这些信息。MYC定义了一些接口，只要Master/Slave分别实现这些接口，就能完成这些基础功能。
 
 ### 实现Master
 
@@ -25,24 +34,27 @@ mammuthus.yarn.MammuthusApplication
 ```java
 trait MammuthusApplication {
 
-  def masterPort: Int
+  def masterPort: Int //应用开启的端口
 
-  def uiAddress: String
+  def uiAddress: String // Master的管理界面地址
 
   /*
-    args 来自于你的--args 参数。由MYC 传递给你。 maps 参数主要为了后续进一步和
-    MYC进行交互，譬如你可以将一些参数通过maps传递给MYC
+    args 来自于--args 参数（启动命令中附件的参数）。MYC 会通过args传递给你。 
+    maps 参数主要为了后续进一步和MYC进行交互，譬如你可以将一些参数通过maps传递给MYC
   */
   def run(args: Array[String], maps: java.util.Map[String, String]):Unit
 
 }
 ```
 
-提供你的端口号，管理页面地址，并且提供一个run方法作为启动入口。
+1. 提供你的端口号
+2. 管理页面地址
+3. 在run方法里初始化你的应用
 
 实例代码如下来自[DynamicDeployMaster.scala](https://github.com/allwefantasy/mammuthus-dynamic-deploy/blob/master/src/main/java/mammuthus/deploy/dynamic/DynamicDeployMaster.scala):
 
 ```
+//启动ServiceFramework框架
 object DynamicDeployMaster {
   var  mammuthusMasterClient:TaskService = _
   def main(args: Array[String]): Unit = {
@@ -55,6 +67,7 @@ object DynamicDeployMaster {
 
 }
 
+//实现MammuthusApplication 接口，保证AM能够拿到端口，UI地址等
 class DynamicDeployMaster extends MammuthusApplication {
 
   var httpPort: Int = 0
@@ -122,7 +135,7 @@ case class ExecutorBackendParam(driverUrl: String,
 具体例子如下[DynamicDeploySlave.scala](https://github.com/allwefantasy/mammuthus-dynamic-deploy/blob/master/src/main/java/mammuthus/deploy/dynamic/DynamicDeploySlave.scala):
 
 ```scala
-
+//启动ServiceFramework框架
 object DynamicDeploySlave extends ExecutorBackend {
   var applicationMasterArguments: ExecutorBackendParam = null
 
@@ -143,6 +156,8 @@ class DynamicDeploySlave
 
 ## 运行方式
 
+完成你的应用开发后，package成一个jar包，然后就可以通过一个java命令完成向Yarn集群提交任务的步骤了。
+
 参考 [mammuthus-yarn-docker-scheduler](https://github.com/allwefantasy/mammuthus-yarn-docker-scheduler)项目的说明，大体来说如下：
 
 ```
@@ -159,7 +174,14 @@ java -cp /Users/allwefantasy/CSDNWorkSpace/mammuthus-yarn-client/target/mammuthu
 --arg "http://appstore" 
 ```
 
-其中 --jar,--dirver-memory,--num-executors,--executor-memory,--class,--slave-class 都是固定的参数。
+其中 
+--jar，应用程序jar包地址
+--dirver-memory, master 数量
+--num-executors，Slave数量
+--executor-memory， Slave 内存大小
+--class, Master 启动类
+--slave-class ， Slave 启动类 
+
 --args 则是你应用需要接受的参数。
 
 
